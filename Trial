@@ -1,0 +1,110 @@
+"""Simple, assumption-driven leveraged buyout (LBO) model.
+
+Run with Python 3.9+: python Trial
+All monetary values are in the same units (for example, millions of dollars).
+"""
+
+from dataclasses import dataclass
+from math import isfinite
+
+
+@dataclass
+class LBOInputs:
+	entry_ebitda: float = 100.0
+	entry_multiple: float = 8.0
+	entry_fees: float = 20.0
+	debt_to_ebitda: float = 5.0
+	annual_ebitda_growth: float = 0.05
+	annual_ebitda_to_cash: float = 0.50
+	interest_rate: float = 0.08
+	holding_period_years: int = 5
+	exit_multiple: float = 8.0
+	exit_fees: float = 10.0
+
+
+def validate(inputs: LBOInputs) -> None:
+	numeric_values = vars(inputs).values()
+	if not all(isfinite(value) for value in numeric_values):
+		raise ValueError("All assumptions must be finite numbers.")
+	if inputs.entry_ebitda <= 0 or inputs.entry_multiple <= 0:
+		raise ValueError("Entry EBITDA and entry multiple must be positive.")
+	if inputs.debt_to_ebitda < 0 or inputs.interest_rate < 0:
+		raise ValueError("Leverage and interest rate cannot be negative.")
+	if inputs.holding_period_years < 1:
+		raise ValueError("Holding period must be at least one year.")
+	if inputs.exit_multiple <= 0 or inputs.exit_fees < 0 or inputs.entry_fees < 0:
+		raise ValueError("Exit multiple must be positive and fees cannot be negative.")
+	if not 0 <= inputs.annual_ebitda_to_cash <= 1:
+		raise ValueError("Annual EBITDA-to-cash conversion must be between 0 and 1.")
+	if inputs.annual_ebitda_growth <= -1:
+		raise ValueError("Annual EBITDA growth must be greater than -100%.")
+
+
+def run_lbo(inputs: LBOInputs) -> dict:
+	"""Calculate purchase funding, annual debt paydown, and sponsor returns."""
+	validate(inputs)
+
+	purchase_price = inputs.entry_ebitda * inputs.entry_multiple
+	opening_debt = inputs.entry_ebitda * inputs.debt_to_ebitda
+	total_uses = purchase_price + inputs.entry_fees
+	sponsor_equity = total_uses - opening_debt
+	if sponsor_equity <= 0:
+		raise ValueError("Debt exceeds total uses; check leverage and fees assumptions.")
+
+	debt = opening_debt
+	ebitda = inputs.entry_ebitda
+	annual_results = []
+	for year in range(1, inputs.holding_period_years + 1):
+		ebitda *= 1 + inputs.annual_ebitda_growth
+		interest = debt * inputs.interest_rate
+		cash_available = max(0.0, ebitda * inputs.annual_ebitda_to_cash - interest)
+		debt_repayment = min(debt, cash_available)
+		debt -= debt_repayment
+		annual_results.append({
+			"year": year,
+			"ebitda": ebitda,
+			"interest": interest,
+			"debt_repayment": debt_repayment,
+			"ending_debt": debt,
+		})
+
+	exit_enterprise_value = ebitda * inputs.exit_multiple
+	exit_equity_value = max(0.0, exit_enterprise_value - debt - inputs.exit_fees)
+	moic = exit_equity_value / sponsor_equity
+	irr = moic ** (1 / inputs.holding_period_years) - 1
+
+	return {
+		"purchase_price": purchase_price,
+		"total_uses": total_uses,
+		"opening_debt": opening_debt,
+		"sponsor_equity": sponsor_equity,
+		"annual_results": annual_results,
+		"exit_enterprise_value": exit_enterprise_value,
+		"ending_debt": debt,
+		"exit_equity_value": exit_equity_value,
+		"moic": moic,
+		"irr": irr,
+	}
+
+
+def main() -> None:
+	assumptions = LBOInputs()
+	results = run_lbo(assumptions)
+	print("LBO Summary (monetary values in millions)")
+	print(f"Purchase price:       ${results['purchase_price']:,.2f}")
+	print(f"Opening debt:         ${results['opening_debt']:,.2f}")
+	print(f"Sponsor equity:       ${results['sponsor_equity']:,.2f}")
+	print("\nDebt schedule:")
+	for row in results["annual_results"]:
+		print(
+			f"Year {row['year']}: EBITDA ${row['ebitda']:,.2f}, "
+			f"repayment ${row['debt_repayment']:,.2f}, "
+			f"ending debt ${row['ending_debt']:,.2f}"
+		)
+	print(f"\nExit equity value:    ${results['exit_equity_value']:,.2f}")
+	print(f"MOIC:                 {results['moic']:.2f}x")
+	print(f"IRR:                  {results['irr']:.1%}")
+
+
+if __name__ == "__main__":
+	main()
